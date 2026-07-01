@@ -10,7 +10,7 @@ concurrency:
 
 jobs:
   checks:
-    runs-on: cat7
+    runs-on: brew7
     env:
       SCCACHE_BUCKET: sccache
       SCCACHE_ENDPOINT: https://sccache-s3.endsy.me
