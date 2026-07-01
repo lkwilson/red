@@ -11,6 +11,14 @@ concurrency:
 jobs:
   checks:
     runs-on: cat7
+    env:
+      SCCACHE_BUCKET: sccache
+      SCCACHE_ENDPOINT: https://sccache-s3.endsy.me
+      SCCACHE_REGION: us-east-1
+      SCCACHE_S3_USE_SSL: "true"
+      SCCACHE_S3_KEY_PREFIX: red
+      AWS_ACCESS_KEY_ID: ${{ secrets.SCCACHE_S3_ACCESS_KEY }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_S3_SECRET_KEY }}
     steps:
       - uses: actions/checkout@v4
       - name: Run checks
@@ -19,6 +27,14 @@ jobs:
   build-dev:
     runs-on: cat7
     needs: checks
+    env:
+      SCCACHE_BUCKET: sccache
+      SCCACHE_ENDPOINT: https://sccache-s3.endsy.me
+      SCCACHE_REGION: us-east-1
+      SCCACHE_S3_USE_SSL: "true"
+      SCCACHE_S3_KEY_PREFIX: red
+      AWS_ACCESS_KEY_ID: ${{ secrets.SCCACHE_S3_ACCESS_KEY }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_S3_SECRET_KEY }}
     steps:
       - uses: actions/checkout@v4
       - name: Set up Docker Buildx
@@ -30,4 +46,12 @@ jobs:
           REG='${{ secrets.DOCKER_REG_URL }}'
           IMG="$REG/library/${GITHUB_REPOSITORY##*/}:dev-latest"
           echo '${{ secrets.DOCKER_REG_PW }}' | docker login "$REG" -u '${{ secrets.DOCKER_REG_UN }}' --password-stdin
-          docker buildx build --platform linux/amd64 -t "$IMG" --push .
+          docker buildx build --platform linux/amd64 \
+            --build-arg SCCACHE_BUCKET="$SCCACHE_BUCKET" \
+            --build-arg SCCACHE_ENDPOINT="$SCCACHE_ENDPOINT" \
+            --build-arg SCCACHE_REGION="$SCCACHE_REGION" \
+            --build-arg SCCACHE_S3_USE_SSL="$SCCACHE_S3_USE_SSL" \
+            --build-arg SCCACHE_S3_KEY_PREFIX="$SCCACHE_S3_KEY_PREFIX" \
+            --secret id=sccache_aws_access_key_id,env=AWS_ACCESS_KEY_ID \
+            --secret id=sccache_aws_secret_access_key,env=AWS_SECRET_ACCESS_KEY \
+            -t "$IMG" --push .

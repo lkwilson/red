@@ -9,6 +9,18 @@ if ! command -v rustup >/dev/null; then
 fi
 rustup component add rustfmt clippy
 
+# Shared compiler cache (backed by self-hosted MinIO on brew7 -- see
+# SCCACHE_ENDPOINT/README). Falls back to a local disk cache if SCCACHE_* env
+# vars aren't set, so this is safe to always enable.
+SCCACHE_VERSION="0.8.2"
+if ! command -v sccache >/dev/null; then
+  ARCH=$(uname -m)
+  curl -L "https://github.com/mozilla/sccache/releases/download/v${SCCACHE_VERSION}/sccache-v${SCCACHE_VERSION}-${ARCH}-unknown-linux-musl.tar.gz" \
+    | tar xz -C /tmp
+  install -m 755 "/tmp/sccache-v${SCCACHE_VERSION}-${ARCH}-unknown-linux-musl/sccache" "$HOME/.cargo/bin/sccache"
+fi
+export RUSTC_WRAPPER=sccache
+
 cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- \
   -W clippy::unwrap_used \
@@ -18,3 +30,4 @@ cargo clippy --all-targets --all-features -- \
   -W clippy::todo \
   -D warnings
 cargo test --verbose
+sccache --show-stats || true
