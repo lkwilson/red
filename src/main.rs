@@ -1,3 +1,4 @@
+// sccache smoke test: trivial touch to force a real rebuild.
 mod server;
 
 use anyhow::{Context, Result};
