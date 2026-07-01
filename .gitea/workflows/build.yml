@@ -9,8 +9,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
+  amd64:
     runs-on: cat7
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
     env:
       SCCACHE_BUCKET: sccache
       SCCACHE_ENDPOINT: https://sccache-s3.endsy.me
@@ -42,6 +44,58 @@ jobs:
             --build-arg SCCACHE_S3_KEY_PREFIX="$SCCACHE_S3_KEY_PREFIX" \
             --secret id=sccache_aws_access_key_id,env=AWS_ACCESS_KEY_ID \
             --secret id=sccache_aws_secret_access_key,env=AWS_SECRET_ACCESS_KEY \
-            -t "$REG/library/${NAME}:${TAG}" \
-            -t "$REG/library/${NAME}:latest" \
+            -t "$REG/library/${NAME}:${TAG}-amd64" \
+            -t "$REG/library/${NAME}:latest-amd64" \
             --push .
+
+  arm64:
+    needs: amd64
+    runs-on: cat7
+    env:
+      SCCACHE_BUCKET: sccache
+      SCCACHE_ENDPOINT: https://sccache-s3.endsy.me
+      SCCACHE_REGION: us-east-1
+      SCCACHE_S3_USE_SSL: "true"
+      SCCACHE_S3_KEY_PREFIX: red
+      AWS_ACCESS_KEY_ID: ${{ secrets.SCCACHE_S3_ACCESS_KEY }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_S3_SECRET_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Docker Buildx
+        run: |
+          docker context create builders --docker "host=tcp://localhost:2375"
+          docker buildx create --name mybuilder --use builders
+      - name: Build and push (arm64)
+        run: |
+          REG='${{ secrets.DOCKER_REG_URL }}'
+          NAME="${GITHUB_REPOSITORY##*/}"
+          TAG="${{ needs.amd64.outputs.tag }}"
+          echo '${{ secrets.DOCKER_REG_PW }}' | docker login "$REG" -u '${{ secrets.DOCKER_REG_UN }}' --password-stdin
+          docker buildx build --platform linux/arm64 \
+            --build-arg SCCACHE_BUCKET="$SCCACHE_BUCKET" \
+            --build-arg SCCACHE_ENDPOINT="$SCCACHE_ENDPOINT" \
+            --build-arg SCCACHE_REGION="$SCCACHE_REGION" \
+            --build-arg SCCACHE_S3_USE_SSL="$SCCACHE_S3_USE_SSL" \
+            --build-arg SCCACHE_S3_KEY_PREFIX="$SCCACHE_S3_KEY_PREFIX" \
+            --secret id=sccache_aws_access_key_id,env=AWS_ACCESS_KEY_ID \
+            --secret id=sccache_aws_secret_access_key,env=AWS_SECRET_ACCESS_KEY \
+            -t "$REG/library/${NAME}:${TAG}-arm64" \
+            -t "$REG/library/${NAME}:latest-arm64" \
+            --push .
+
+  manifest:
+    needs: [amd64, arm64]
+    runs-on: cat7
+    steps:
+      - name: Combine into multi-arch manifests
+        run: |
+          REG='${{ secrets.DOCKER_REG_URL }}'
+          NAME="${GITHUB_REPOSITORY##*/}"
+          TAG="${{ needs.amd64.outputs.tag }}"
+          echo '${{ secrets.DOCKER_REG_PW }}' | docker login "$REG" -u '${{ secrets.DOCKER_REG_UN }}' --password-stdin
+          for base in "$TAG" latest; do
+            docker buildx imagetools create \
+              -t "$REG/library/${NAME}:${base}" \
+              "$REG/library/${NAME}:${base}-amd64" \
+              "$REG/library/${NAME}:${base}-arm64"
+          done
