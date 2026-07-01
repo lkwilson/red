@@ -1,0 +1,33 @@
+name: PR checks
+
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: cat7
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run checks
+        run: bash ./scripts/check.sh
+
+  build-dev:
+    runs-on: cat7
+    needs: checks
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Docker Buildx
+        run: |
+          docker context create builders --docker "host=tcp://localhost:2375"
+          docker buildx create --name mybuilder --use builders
+      - name: Build and push dev-latest (amd64)
+        run: |
+          REG='${{ secrets.DOCKER_REG_URL }}'
+          IMG="$REG/library/${GITHUB_REPOSITORY##*/}:dev-latest"
+          echo '${{ secrets.DOCKER_REG_PW }}' | docker login "$REG" -u '${{ secrets.DOCKER_REG_UN }}' --password-stdin
+          docker buildx build --platform linux/amd64 -t "$IMG" --push .

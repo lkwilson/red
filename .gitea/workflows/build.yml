@@ -1,0 +1,32 @@
+name: Build and push release image
+
+on:
+  push:
+    tags: ['[0-9]*.[0-9]*.[0-9]*']
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: cat7
+    steps:
+      - uses: actions/checkout@v4
+      - name: Get tag
+        id: tag
+        run: echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+      - name: Set up Docker Buildx
+        run: |
+          docker context create builders --docker "host=tcp://localhost:2375"
+          docker buildx create --name mybuilder --use builders
+      - name: Build and push (amd64)
+        run: |
+          REG='${{ secrets.DOCKER_REG_URL }}'
+          NAME="${GITHUB_REPOSITORY##*/}"
+          TAG="${GITHUB_REF_NAME}"
+          echo '${{ secrets.DOCKER_REG_PW }}' | docker login "$REG" -u '${{ secrets.DOCKER_REG_UN }}' --password-stdin
+          docker buildx build --platform linux/amd64 \
+            -t "$REG/library/${NAME}:${TAG}" \
+            -t "$REG/library/${NAME}:latest" \
+            --push .

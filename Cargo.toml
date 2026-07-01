@@ -1,0 +1,13 @@
+[package]
+name = "red"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+axum = "0.6"
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9.34"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
