@@ -1,4 +1,9 @@
-FROM rust:alpine AS builder
+# Pinned, not `rust:alpine`. A rolling base image is the sccache poison vector:
+# sccache fingerprints the compiler via `rustc -vV`, which stays identical when
+# Alpine rebuilds the *same* rustc version against a newer musl. Cached objects
+# built against the old std then get linked into a build using the new one ->
+# ABI mismatch -> SIGSEGV on boot. Bump this tag (Renovate can) to move rustc.
+FROM rust:1.96-alpine3.24 AS builder
 WORKDIR /app
 COPY Cargo.lock Cargo.lock
 COPY Cargo.toml Cargo.toml
@@ -37,7 +42,14 @@ RUN --mount=type=secret,id=sccache_aws_access_key_id \
     [ -n "$SCCACHE_ENDPOINT" ] || unset SCCACHE_ENDPOINT; \
     [ -n "$SCCACHE_REGION" ] || unset SCCACHE_REGION; \
     [ -n "$SCCACHE_S3_USE_SSL" ] || unset SCCACHE_S3_USE_SSL; \
-    [ -n "$SCCACHE_S3_KEY_PREFIX" ] || unset SCCACHE_S3_KEY_PREFIX; \
+    # Scope the sccache namespace by target triple + exact rustc version, so a
+    # toolchain/base-image bump lands in a *fresh* namespace instead of reusing
+    # objects from a different std/musl, and so release/arch/dev(check) builds
+    # can never hand each other an object. This is the real guard against the
+    # poisoning above; the pin just keeps the version string honest.
+    if [ -n "$SCCACHE_S3_KEY_PREFIX" ]; then \
+        export SCCACHE_S3_KEY_PREFIX="${SCCACHE_S3_KEY_PREFIX}/${TARGET}/rustc-$(rustc --version | awk '{print $2}')"; \
+    else unset SCCACHE_S3_KEY_PREFIX; fi; \
     [ -n "$AWS_ACCESS_KEY_ID" ] || unset AWS_ACCESS_KEY_ID; \
     [ -n "$AWS_SECRET_ACCESS_KEY" ] || unset AWS_SECRET_ACCESS_KEY; \
     cargo build --release --target "$TARGET" --jobs 6 && \
@@ -45,7 +57,7 @@ RUN --mount=type=secret,id=sccache_aws_access_key_id \
     mkdir -p /app/target/release && \
     cp "/app/target/$TARGET/release/red" /app/target/release/red
 
-FROM alpine:latest
+FROM alpine:3.24
 WORKDIR /app
 COPY --from=builder /app/target/release/red bin/red
 RUN apk add --no-cache libgcc && \

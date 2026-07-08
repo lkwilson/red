@@ -21,6 +21,14 @@ if ! command -v sccache >/dev/null; then
 fi
 export RUSTC_WRAPPER=sccache
 
+# Isolate this native (glibc host, test profile) build's cache namespace from
+# the musl release-image build so they can never share an object. Scope by host
+# target + rustc version; a rolling toolchain then starts a fresh, non-colliding
+# namespace. (The release Dockerfile does the same by target.)
+if [ -n "${SCCACHE_S3_KEY_PREFIX:-}" ]; then
+  export SCCACHE_S3_KEY_PREFIX="${SCCACHE_S3_KEY_PREFIX}/check/$(rustc -vV | sed -n 's/^host: //p')/rustc-$(rustc --version | awk '{print $2}')"
+fi
+
 cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- \
   -W clippy::unwrap_used \
