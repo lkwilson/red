@@ -10,7 +10,7 @@ jobs:
     if: ${{ github.event.pull_request.merged == true && (contains(github.event.pull_request.labels.*.name, 'patch') || contains(github.event.pull_request.labels.*.name, 'minor') || contains(github.event.pull_request.labels.*.name, 'major')) }}
     runs-on: brew7
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # PAT, NOT github.token: Gitea Actions does not trigger workflows for
           # refs pushed with the automatic token (loop-prevention), so a tag
