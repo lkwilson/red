@@ -26,7 +26,7 @@ ENV RUSTC_WRAPPER=sccache
 # (build args end up in the image history/cache).
 RUN --mount=type=secret,id=sccache_aws_access_key_id \
     --mount=type=secret,id=sccache_aws_secret_access_key \
-    apk add --no-cache musl-dev curl && \
+    apk add --no-cache curl && \
     case "$TARGETPLATFORM" in \
         "linux/amd64") TARGET="x86_64-unknown-linux-musl"; SCCACHE_ARCH="x86_64" ;; \
         "linux/arm64") TARGET="aarch64-unknown-linux-musl"; SCCACHE_ARCH="aarch64" ;; \
@@ -60,8 +60,7 @@ RUN --mount=type=secret,id=sccache_aws_access_key_id \
 FROM alpine:3.24
 WORKDIR /app
 COPY --from=builder /app/target/release/red bin/red
-RUN apk add --no-cache libgcc && \
-    chmod +x bin/red
+RUN chmod +x bin/red
 ENV PATH="/app/bin:${PATH}"
 VOLUME /app/config.yaml
 CMD ["red"]
