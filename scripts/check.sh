@@ -12,7 +12,7 @@ rustup component add rustfmt clippy
 # Shared compiler cache (backed by self-hosted MinIO on brew7 -- see
 # SCCACHE_ENDPOINT/README). Falls back to a local disk cache if SCCACHE_* env
 # vars aren't set, so this is safe to always enable.
-SCCACHE_VERSION="0.8.2"
+SCCACHE_VERSION="0.16.0"
 if ! command -v sccache >/dev/null; then
   ARCH=$(uname -m)
   curl -L "https://github.com/mozilla/sccache/releases/download/v${SCCACHE_VERSION}/sccache-v${SCCACHE_VERSION}-${ARCH}-unknown-linux-musl.tar.gz" \
