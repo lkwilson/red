@@ -15,13 +15,13 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        Path, State,
+        Path, Query, State,
     },
     http::StatusCode,
     response::{IntoResponse, Response},
@@ -34,7 +34,7 @@ use k8s_openapi::api::core::v1::Pod;
 use kube::api::{Api, ListParams, LogParams};
 use kube::{Client, Config};
 use rcon::Connection;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::net::TcpStream;
 use tracing::warn;
 
@@ -48,6 +48,14 @@ const K8S_REQ_TIMEOUT: Duration = Duration::from_secs(8);
 /// Bound RCON connect + each command so a wedged server can't hang a socket.
 const RCON_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Cap the Loki HTTP call so a wedged Loki can't hang a history request past
+/// shutdown (same spirit as `K8S_REQ_TIMEOUT`).
+const LOKI_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Hard cap on lines requested from Loki in one `query_range` (boots * lines is
+/// clamped to this), so an absurd `?boots=&lines=` can't ask Loki for the moon.
+const LOKI_LIMIT_CAP: usize = 5000;
+
 /// The itzg container name. Backup-enabled servers run a second container
 /// (`backup`), so `log_stream` must name the container or the apiserver rejects
 /// the request as ambiguous.
@@ -60,6 +68,11 @@ struct McState {
     namespace: String,
     rcon_port: String,
     rcon_password: String,
+    /// Base URL of in-cluster Loki (ns `monitoring`); cross-namespace DNS makes
+    /// the default correct in prod with no Deployment change.
+    loki_url: String,
+    /// Shared HTTP client for Loki, timeout-capped once (see `LOKI_TIMEOUT`).
+    http: reqwest::Client,
 }
 
 /// One row of the mc-ui server list.
@@ -309,6 +322,215 @@ async fn handle_rcon(mut socket: WebSocket, addr: String, password: String) {
     }
 }
 
+/// `GET /api/mc/servers/:name/history` query params (all optional).
+#[derive(Deserialize)]
+struct HistoryParams {
+    /// Max boots to return (newest first).
+    #[serde(default = "default_boots")]
+    boots: usize,
+    /// Max tail lines kept per boot.
+    #[serde(default = "default_lines")]
+    lines: usize,
+    /// How far back to query Loki, in hours.
+    #[serde(default = "default_lookback_hours")]
+    lookback_hours: u64,
+}
+
+fn default_boots() -> usize {
+    10
+}
+fn default_lines() -> usize {
+    500
+}
+fn default_lookback_hours() -> u64 {
+    720
+}
+
+/// One container boot's log tail. camelCase to match the mc-ui contract.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Boot {
+    /// Pod the boot ran in (`stream.pod`).
+    pod: String,
+    /// Stable per-boot id: `<pod>#<restartCount>`, or the raw filename if the
+    /// restart count can't be parsed.
+    id: String,
+    /// Min entry timestamp of the returned lines, Unix ms.
+    start_ms: u64,
+    /// Max entry timestamp of the returned lines, Unix ms.
+    end_ms: u64,
+    /// The boot's tail: chronological ascending, most-recent `lines` at the end.
+    lines: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct HistoryResponse {
+    boots: Vec<Boot>,
+}
+
+// --- Loki `query_range` response shape (only the fields we read). ---
+
+#[derive(Deserialize)]
+struct LokiResponse {
+    data: LokiData,
+}
+#[derive(Deserialize)]
+struct LokiData {
+    #[serde(default)]
+    result: Vec<LokiStream>,
+}
+#[derive(Deserialize)]
+struct LokiStream {
+    #[serde(default)]
+    stream: LokiLabels,
+    /// Each value is `["<ts_ns_string>", "<line>"]` (a trailing structured-
+    /// metadata object is tolerated by reading only indices 0 and 1).
+    #[serde(default)]
+    values: Vec<Vec<serde_json::Value>>,
+}
+#[derive(Deserialize, Default)]
+struct LokiLabels {
+    #[serde(default)]
+    pod: String,
+    #[serde(default)]
+    filename: String,
+}
+
+/// Accumulates one boot's entries while grouping streams by filename.
+struct BootAccum {
+    pod: String,
+    filename: String,
+    entries: Vec<(u64, String)>,
+}
+
+/// `<pod>#<restartCount>` parsed from the `filename` label
+/// (`.../minecraft-server/<restartCount>.log`); falls back to the raw filename.
+fn boot_id(pod: &str, filename: &str) -> String {
+    filename
+        .rsplit('/')
+        .next()
+        .and_then(|f| f.strip_suffix(".log"))
+        .filter(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+        .map(|n| format!("{pod}#{n}"))
+        .unwrap_or_else(|| filename.to_string())
+}
+
+/// Pure boot-grouping/sort/tail over a raw Loki `query_range` body. Factored out
+/// so it's unit-testable without a live Loki. Each distinct `filename` is one
+/// container boot; streams sharing a filename are defensively merged.
+fn boots_from_loki(body: &str, max_boots: usize, max_lines: usize) -> Result<Vec<Boot>> {
+    let parsed: LokiResponse = serde_json::from_str(body)?;
+
+    let mut groups: BTreeMap<String, BootAccum> = BTreeMap::new();
+    for stream in parsed.data.result {
+        let pod = stream.stream.pod;
+        let filename = stream.stream.filename;
+        let acc = groups.entry(filename.clone()).or_insert_with(|| BootAccum {
+            pod: pod.clone(),
+            filename,
+            entries: Vec::new(),
+        });
+        if acc.pod.is_empty() && !pod.is_empty() {
+            acc.pod = pod;
+        }
+        for v in stream.values {
+            let (Some(ts), Some(line)) = (
+                v.first().and_then(serde_json::Value::as_str),
+                v.get(1).and_then(serde_json::Value::as_str),
+            ) else {
+                continue;
+            };
+            let Ok(ts_ns) = ts.parse::<u64>() else {
+                continue;
+            };
+            acc.entries.push((ts_ns, line.to_string()));
+        }
+    }
+
+    let mut boots: Vec<Boot> = groups
+        .into_values()
+        .filter_map(|mut acc| {
+            acc.entries.sort_by_key(|(ts, _)| *ts);
+            if acc.entries.len() > max_lines {
+                let drop_to = acc.entries.len() - max_lines;
+                acc.entries.drain(0..drop_to);
+            }
+            let start_ms = acc.entries.first().map(|(ts, _)| ts / 1_000_000)?;
+            let end_ms = acc.entries.last().map(|(ts, _)| ts / 1_000_000)?;
+            let id = boot_id(&acc.pod, &acc.filename);
+            let lines = acc.entries.into_iter().map(|(_, l)| l).collect();
+            Some(Boot {
+                pod: acc.pod,
+                id,
+                start_ms,
+                end_ms,
+                lines,
+            })
+        })
+        .collect();
+
+    boots.sort_by_key(|b| std::cmp::Reverse(b.end_ms));
+    boots.truncate(max_boots);
+    Ok(boots)
+}
+
+/// Query Loki for the server's boot history. This path only needs Loki (not the
+/// k8s client), so it deliberately does NOT gate on `state.client`/`unavailable`
+/// — a scaled-to-0 server with no pod still has retained log history.
+async fn fetch_history(state: &McState, name: &str, params: &HistoryParams) -> Result<Vec<Boot>> {
+    let now_ns: u64 = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos() as u64;
+    let lookback_ns = params.lookback_hours.saturating_mul(3_600_000_000_000);
+    let start_ns = now_ns.saturating_sub(lookback_ns);
+    let limit = params
+        .boots
+        .saturating_mul(params.lines)
+        .min(LOKI_LIMIT_CAP);
+
+    let query = format!(
+        r#"{{namespace="{}", app="mc-{}", container="{}"}}"#,
+        state.namespace, name, MC_CONTAINER
+    );
+    let url = format!("{}/loki/api/v1/query_range", state.loki_url);
+    // Loki is single-tenant (auth_enabled=false), so no X-Scope-OrgID header.
+    let resp = state
+        .http
+        .get(&url)
+        .query(&[
+            ("query", query.as_str()),
+            ("start", &start_ns.to_string()),
+            ("end", &now_ns.to_string()),
+            ("direction", "backward"),
+            ("limit", &limit.to_string()),
+        ])
+        .send()
+        .await?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("loki query_range {status}: {body}");
+    }
+    let text = resp.text().await?;
+    boots_from_loki(&text, params.boots, params.lines)
+}
+
+/// GET /api/mc/servers/:name/history -> `HistoryResponse` of previous-boot logs
+/// from Loki. 400 on invalid name; 502 if Loki is unreachable / errors / body
+/// doesn't parse.
+async fn history(
+    Path(name): Path<String>,
+    Query(params): Query<HistoryParams>,
+    State(state): State<Arc<McState>>,
+) -> Response {
+    if !valid_name(&name) {
+        return (StatusCode::BAD_REQUEST, "invalid server name").into_response();
+    }
+    match fetch_history(&state, &name, &params).await {
+        Ok(boots) => Json(HistoryResponse { boots }).into_response(),
+        Err(err) => bad_gateway(&err),
+    }
+}
+
 /// Registers the `/api/mc/*` scope. Builds the k8s client once; a failure here
 /// doesn't sink the server — the endpoints just report unavailable.
 pub async fn setup_mc(app: Router) -> Result<Router> {
@@ -319,18 +541,103 @@ pub async fn setup_mc(app: Router) -> Result<Router> {
             None
         }
     };
+    // Shared, timeout-capped HTTP client for Loki. Build failure is effectively
+    // never (no network I/O here); propagate it rather than silently degrade.
+    let http = reqwest::Client::builder().timeout(LOKI_TIMEOUT).build()?;
     let state = Arc::new(McState {
         client,
         namespace: env_or("MC_NAMESPACE", "mc"),
         rcon_port: env_or("RCON_PORT", "25575"),
         rcon_password: env_or("RCON_PASSWORD", "minecraft"),
+        loki_url: env_or("LOKI_URL", "http://loki.monitoring.svc.cluster.local:3100"),
+        http,
     });
 
     let mc = Router::new()
         .route("/api/mc/servers", get(handle_servers))
         .route("/api/mc/servers/:name/logs", get(logs_ws))
         .route("/api/mc/servers/:name/rcon", get(rcon_ws))
+        .route("/api/mc/servers/:name/history", get(history))
         .with_state(state);
 
     Ok(app.merge(mc))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const PAYLOAD: &str = r#"{
+      "data": {
+        "resultType": "streams",
+        "result": [
+          {
+            "stream": {
+              "pod": "mc-bolty-59bd4dcd55-l4cxd",
+              "filename": "/var/log/pods/mc_mc-bolty-59bd4dcd55-l4cxd_uid/minecraft-server/1.log"
+            },
+            "values": [
+              ["1720730460000000000", "later line"],
+              ["1720730100000000000", "earlier line"]
+            ]
+          },
+          {
+            "stream": {
+              "pod": "mc-bolty-6c9f7d-abcde",
+              "filename": "/var/log/pods/mc_mc-bolty-6c9f7d-abcde_uid/minecraft-server/0.log"
+            },
+            "values": [
+              ["1720740000000000000", "boot2 a"],
+              ["1720740100000000000", "boot2 b"],
+              ["1720740200000000000", "boot2 c"]
+            ]
+          }
+        ]
+      }
+    }"#;
+
+    #[test]
+    fn groups_by_boot_sorts_newest_first_and_tails() {
+        let boots = boots_from_loki(PAYLOAD, 10, 2).unwrap_or_default();
+        assert_eq!(boots.len(), 2);
+
+        // Newest boot (higher end_ms) comes first.
+        let newest = &boots[0];
+        assert_eq!(newest.id, "mc-bolty-6c9f7d-abcde#0");
+        assert_eq!(newest.pod, "mc-bolty-6c9f7d-abcde");
+        // Tailed to the last 2 lines, ascending; "boot2 a" dropped.
+        assert_eq!(newest.lines, vec!["boot2 b", "boot2 c"]);
+        assert_eq!(newest.start_ms, 1_720_740_100_000);
+        assert_eq!(newest.end_ms, 1_720_740_200_000);
+
+        // Older boot: values sorted ascending, ns -> ms.
+        let older = &boots[1];
+        assert_eq!(older.id, "mc-bolty-59bd4dcd55-l4cxd#1");
+        assert_eq!(older.lines, vec!["earlier line", "later line"]);
+        assert_eq!(older.start_ms, 1_720_730_100_000);
+        assert_eq!(older.end_ms, 1_720_730_460_000);
+    }
+
+    #[test]
+    fn respects_max_boots() {
+        let boots = boots_from_loki(PAYLOAD, 1, 500).unwrap_or_default();
+        assert_eq!(boots.len(), 1);
+        assert_eq!(boots[0].id, "mc-bolty-6c9f7d-abcde#0");
+    }
+
+    #[test]
+    fn boot_id_falls_back_to_filename_when_unparseable() {
+        assert_eq!(
+            boot_id("p", "/var/log/pods/x/minecraft-server/3.log"),
+            "p#3"
+        );
+        assert_eq!(boot_id("p", "weird-name"), "weird-name");
+        assert_eq!(boot_id("p", "/a/b/notanumber.log"), "/a/b/notanumber.log");
+    }
+
+    #[test]
+    fn empty_result_yields_no_boots() {
+        let boots = boots_from_loki(r#"{"data":{"result":[]}}"#, 10, 500).unwrap_or_default();
+        assert!(boots.is_empty());
+    }
 }

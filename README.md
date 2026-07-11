@@ -26,12 +26,22 @@ panel behind `mc-ui`:
 - `GET /api/mc/servers/:name/rcon` — bidirectional **WebSocket** RCON console;
   each text frame is a command, each reply the response. Connects to the
   `mc-<name>-rcon` ClusterIP Service.
+- `GET /api/mc/servers/:name/history` — previous-boot log history from Grafana
+  Loki (ns `monitoring`, 90d retention), since k3s only keeps ~1 boot of
+  container logs. Optional query params `?boots=<N>` (default 10),
+  `?lines=<M>` (default 500), `?lookback_hours=<H>` (default 720 = 30d). Returns
+  `{ "boots": [ { pod, id, startMs, endMs, lines } ] }`, newest boot first, each
+  boot's `lines` a chronological tail. Only needs Loki (not the k8s client), so
+  a scaled-to-0 server still returns history. Loki errors -> `502`.
 
 The mc scope needs an in-cluster ServiceAccount with least-privilege access to ns
 `mc` (pods + pods/log): `home/red`, RBAC in home-infra
 `clusters/brew7/apps/configs/red-mc-rbac.yaml`. Running locally without a
 kubeconfig, `/api/mc/*` reports `503` and countdown still works. Config is via
 env (`MC_NAMESPACE`, `RCON_PORT`, `RCON_PASSWORD`; defaults match the mc chart).
+The `history` endpoint reads Loki at `LOKI_URL` (default
+`http://loki.monitoring.svc.cluster.local:3100`); in-cluster cross-namespace DNS
+makes the default correct in prod with no Deployment change.
 
 Routes are registered in `src/server.rs` (`setup_countdowns` + `setup_mc`).
 

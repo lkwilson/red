@@ -19,7 +19,11 @@ futures = "0.3"
 # Minecraft RCON client (Source protocol) for the interactive console.
 rcon = { version = "0.6", features = ["rt-tokio"] }
 redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
+# HTTP client for the /api/mc/*/history endpoint's Loki queries. default-features
+# off + rustls-tls keeps the static musl build openssl-free (same choice as kube).
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 serde_yaml = "0.9.34"
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
