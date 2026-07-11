@@ -26,7 +26,7 @@ fn redis_url() -> String {
     format!("redis://{host}:{port}")
 }
 
-/// GET /api/countdowns -> every countdown as a `{ name: date }` map.
+/// GET /api/countdown/countdowns -> every countdown as a `{ name: date }` map.
 async fn handle_list(mut conn: ConnectionManager) -> impl IntoResponse {
     let res: redis::RedisResult<HashMap<String, String>> = conn.hgetall(COUNTDOWNS_KEY).await;
     match res {
@@ -38,7 +38,7 @@ async fn handle_list(mut conn: ConnectionManager) -> impl IntoResponse {
     }
 }
 
-/// GET /api/countdowns/:name -> the one countdown's date, or 404.
+/// GET /api/countdown/countdowns/:name -> the one countdown's date, or 404.
 async fn handle_get(Path(name): Path<String>, mut conn: ConnectionManager) -> impl IntoResponse {
     let res: redis::RedisResult<Option<String>> = conn.hget(COUNTDOWNS_KEY, &name).await;
     match res {
@@ -51,7 +51,7 @@ async fn handle_get(Path(name): Path<String>, mut conn: ConnectionManager) -> im
     }
 }
 
-/// POST /api/countdowns  `{ "name": ..., "date": ... }` -> stores/overwrites it.
+/// POST /api/countdown/countdowns  `{ "name": ..., "date": ... }` -> stores/overwrites it.
 async fn handle_put(Json(cd): Json<Countdown>, mut conn: ConnectionManager) -> impl IntoResponse {
     let res: redis::RedisResult<i64> = conn.hset(COUNTDOWNS_KEY, &cd.name, &cd.date).await;
     match res {
@@ -63,7 +63,7 @@ async fn handle_put(Json(cd): Json<Countdown>, mut conn: ConnectionManager) -> i
     }
 }
 
-/// DELETE /api/countdowns/:name -> removes it (idempotent).
+/// DELETE /api/countdown/countdowns/:name -> removes it (idempotent).
 async fn handle_delete(Path(name): Path<String>, mut conn: ConnectionManager) -> impl IntoResponse {
     let res: redis::RedisResult<i64> = conn.hdel(COUNTDOWNS_KEY, &name).await;
     match res {
@@ -82,7 +82,7 @@ pub async fn setup_countdowns(app: Router) -> Result<Router> {
     let conn = ConnectionManager::new(client).await?;
     Ok(app
         .route(
-            "/api/countdowns",
+            "/api/countdown/countdowns",
             get({
                 let conn = conn.clone();
                 move || handle_list(conn.clone())
@@ -93,7 +93,7 @@ pub async fn setup_countdowns(app: Router) -> Result<Router> {
             }),
         )
         .route(
-            "/api/countdowns/:name",
+            "/api/countdown/countdowns/:name",
             get({
                 let conn = conn.clone();
                 move |path| handle_get(path, conn.clone())
