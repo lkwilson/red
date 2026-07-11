@@ -45,6 +45,11 @@ use tracing::warn;
 /// minutes without a line — an idle-read timeout would sever the log tail.
 const K8S_REQ_TIMEOUT: Duration = Duration::from_secs(8);
 
+/// Keep quiet log WebSockets alive through reverse proxies and load balancers.
+/// This is a WebSocket control frame, not a log line, so browsers answer with a
+/// Pong automatically and mc-ui never renders it.
+const LOG_WS_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(20);
+
 /// Bound RCON connect + each command so a wedged server can't hang a socket.
 const RCON_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -236,6 +241,11 @@ async fn stream_logs(mut socket: WebSocket, client: Client, ns: String, name: St
     // futures-io AsyncBufRead -> a Stream of lines; pin so it's pollable in select!.
     let lines = reader.lines();
     futures::pin_mut!(lines);
+    let mut heartbeats = tokio::time::interval(LOG_WS_HEARTBEAT_INTERVAL);
+    heartbeats.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // `interval` ticks immediately on creation; consume that tick so the first
+    // heartbeat is sent only after a full quiet interval.
+    heartbeats.tick().await;
 
     loop {
         tokio::select! {
@@ -255,6 +265,11 @@ async fn stream_logs(mut socket: WebSocket, client: Client, ns: String, name: St
             msg = socket.recv() => match msg {
                 None | Some(Err(_)) | Some(Ok(Message::Close(_))) => break,
                 _ => {}
+            },
+            _ = heartbeats.tick() => {
+                if socket.send(Message::Ping(Vec::new())).await.is_err() {
+                    break;
+                }
             },
         }
     }
