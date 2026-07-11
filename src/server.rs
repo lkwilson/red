@@ -4,7 +4,7 @@ use std::net::SocketAddr;
 use tokio::task::JoinSet;
 use tracing::info;
 
-use crate::{countdowns::setup_countdowns, Config};
+use crate::{countdowns::setup_countdowns, mc::setup_mc, Config};
 
 async fn root() -> impl IntoResponse {
     (StatusCode::OK, "red")
@@ -19,6 +19,7 @@ pub async fn start_server(join_set: &mut JoinSet<Result<()>>, config: Config) ->
         .route("/", get(root))
         .route("/health", get(health));
     let app = setup_countdowns(app).await?;
+    let app = setup_mc(app).await?;
 
     let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
     info!("Server listening on http://{}", addr);

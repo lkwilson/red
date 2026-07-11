@@ -1,4 +1,5 @@
 mod countdowns;
+mod mc;
 mod server;
 
 use anyhow::{Context, Result};

@@ -5,7 +5,19 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0"
-axum = "0.6"
+# "ws" is not a default axum 0.6 feature; the mc console's log + rcon endpoints
+# are WebSockets (axum::extract::ws).
+axum = { version = "0.6", features = ["ws"] }
+# In-cluster k8s client for the /api/mc/* scope (list mc pods, stream pod logs).
+# Versions + feature set match hub (hub/src/ops.rs); rustls-tls keeps the static
+# musl build openssl-free.
+kube = { version = "0.97", default-features = false, features = ["client", "rustls-tls"] }
+k8s-openapi = { version = "0.23", features = ["v1_30"] }
+# kube's log_stream yields a futures-io AsyncBufRead; futures gives us its
+# AsyncBufReadExt::lines() + StreamExt to forward lines to the log WebSocket.
+futures = "0.3"
+# Minecraft RCON client (Source protocol) for the interactive console.
+rcon = { version = "0.6", features = ["rt-tokio"] }
 redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.9.34"
