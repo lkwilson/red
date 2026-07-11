@@ -3,7 +3,7 @@
 # Alpine rebuilds the *same* rustc version against a newer musl. Cached objects
 # built against the old std then get linked into a build using the new one ->
 # ABI mismatch -> SIGSEGV on boot. Bump this tag (Renovate can) to move rustc.
-FROM rust:1.96-alpine3.24 AS builder
+FROM rust:1.97-alpine3.24 AS builder
 WORKDIR /app
 COPY Cargo.lock Cargo.lock
 COPY Cargo.toml Cargo.toml
