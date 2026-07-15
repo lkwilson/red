@@ -43,7 +43,51 @@ The `history` endpoint reads Loki at `LOKI_URL` (default
 `http://loki.monitoring.svc.cluster.local:3100`); in-cluster cross-namespace DNS
 makes the default correct in prod with no Deployment change.
 
-Routes are registered in `src/server.rs` (`setup_countdowns` + `setup_mc`).
+**systems scope** (`src/systems.rs`, redis-backed) — a maintenance/chore tracker
+with a **synthetic forcing function**: a non-terminating "keep doing X" goal is
+turned into an accruing *deficit* that pages you via ntfy, so a skipped habit has
+a real deadline instead of silently rotting.
+
+Every track has a `kind` fixing how a logged session's `load` is computed:
+
+- `box` — `{ duration_min, intensity }`, `load = duration_min * intensity`
+  (high-variance, e.g. a workout).
+- `check` — `{}`, `load = unit_load` (binary "did it").
+- `loe` — `{ loe: "low"|"med"|"high" }`, `load = unit_load * {1,2,3}`.
+
+Deficit/fitness is **never stored** — it's always recomputed from the raw session
+log (EMA fitness vs a maintenance floor), so the model is restart-safe and
+retunable. All config (tracks, tunables, schedules, ntfy settings) lives in redis
+and is driven by the UI; this scope reads **no env beyond `REDIS_HOST`/`REDIS_PORT`**.
+
+Endpoints (all under `/api/systems`, JSON):
+
+- `GET|PUT /api/systems/settings` — global settings (ntfy URL, dashboard URL,
+  `alert_hour`, `warmup_days`); GET returns defaults if unset.
+- `GET /api/systems/overview` — one summary row per track.
+- `GET|POST /api/systems/tracks` — list / create (server slugifies `name`->`id`,
+  assigns `created_ms`, 409 if the id exists).
+- `GET|PUT|DELETE /api/systems/tracks/:id` — fetch / update mutable fields (kind
+  immutable) / delete (also drops its sessions/skips/scheduled/last_alert).
+- `POST /api/systems/tracks/:id/session` — log a session (kind-specific body) ->
+  `{ load }`.
+- `POST /api/systems/tracks/:id/skip` — log a skip `{ scheduled_date, reason? }`;
+  a null/empty reason is an *unlogged* skip (the relapse signal).
+- `GET /api/systems/tracks/:id/dashboard` — full per-track model (fitness +
+  daily-load series, floor, deficit, 14-day adherence).
+
+A detached background task ticks every 15 min: past `alert_hour` it materializes
+each track's due obligation, recomputes the deficit, and pages ntfy once per day
+per track when `deficit_load > alert_threshold` OR there are unlogged skips.
+Empty `ntfy_url` disables paging.
+
+Redis keys (namespace `systems:`): `systems:settings` (JSON), `systems:tracks`
+(hash `id -> track JSON`), `systems:sessions:<id>` / `systems:skips:<id>` (lists),
+`systems:scheduled:<id>` (hash `date -> {materialized_ms}`), `systems:last_alert:<id>`
+(string `YYYY-MM-DD`, same-day page dedupe).
+
+Routes are registered in `src/server.rs` (`setup_countdowns` + `setup_mc` +
+`setup_systems`).
 
 ## Checks
 

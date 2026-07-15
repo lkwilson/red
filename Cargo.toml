@@ -5,6 +5,9 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0"
+# systems scope buckets sessions into LOCAL calendar days and does weekday math
+# (0=Sun..6=Sat); the default "clock" feature is needed for chrono::Local.
+chrono = { version = "0.4", features = ["serde"] }
 # "ws" is not a default axum 0.6 feature; the mc console's log + rcon endpoints
 # are WebSockets (axum::extract::ws).
 axum = { version = "0.6", features = ["ws"] }
