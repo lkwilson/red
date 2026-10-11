@@ -9,9 +9,6 @@ COPY Cargo.lock Cargo.lock
 COPY Cargo.toml Cargo.toml
 COPY src src
 
-# Use ARG to get the target platform
-ARG TARGETPLATFORM
-
 # Shared compiler cache (self-hosted MinIO, see scripts/check.sh). Non-secret
 # so it's passed via --build-arg; falls back to a local disk cache if unset.
 ARG SCCACHE_VERSION=0.18.0
@@ -27,14 +24,10 @@ ENV RUSTC_WRAPPER=sccache
 RUN --mount=type=secret,id=sccache_aws_access_key_id \
     --mount=type=secret,id=sccache_aws_secret_access_key \
     apk add --no-cache curl && \
-    case "$TARGETPLATFORM" in \
-        "linux/amd64") TARGET="x86_64-unknown-linux-musl"; SCCACHE_ARCH="x86_64" ;; \
-        "linux/arm64") TARGET="aarch64-unknown-linux-musl"; SCCACHE_ARCH="aarch64" ;; \
-        *) echo "Unsupported platform: $TARGETPLATFORM" && exit 1 ;; \
-    esac && \
-    curl -L "https://github.com/mozilla/sccache/releases/download/v${SCCACHE_VERSION}/sccache-v${SCCACHE_VERSION}-${SCCACHE_ARCH}-unknown-linux-musl.tar.gz" \
+    TARGET="x86_64-unknown-linux-musl" && \
+    curl -L "https://github.com/mozilla/sccache/releases/download/v${SCCACHE_VERSION}/sccache-v${SCCACHE_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
       | tar xz -C /tmp && \
-    install -m 755 "/tmp/sccache-v${SCCACHE_VERSION}-${SCCACHE_ARCH}-unknown-linux-musl/sccache" /usr/local/bin/sccache && \
+    install -m 755 "/tmp/sccache-v${SCCACHE_VERSION}-x86_64-unknown-linux-musl/sccache" /usr/local/bin/sccache && \
     rustup target add "$TARGET" && \
     export AWS_ACCESS_KEY_ID="$(cat /run/secrets/sccache_aws_access_key_id 2>/dev/null || true)" && \
     export AWS_SECRET_ACCESS_KEY="$(cat /run/secrets/sccache_aws_secret_access_key 2>/dev/null || true)" && \
@@ -44,8 +37,7 @@ RUN --mount=type=secret,id=sccache_aws_access_key_id \
     [ -n "$SCCACHE_S3_USE_SSL" ] || unset SCCACHE_S3_USE_SSL; \
     # Scope the sccache namespace by target triple + exact rustc version, so a
     # toolchain/base-image bump lands in a *fresh* namespace instead of reusing
-    # objects from a different std/musl, and so release/arch/dev(check) builds
-    # can never hand each other an object. This is the real guard against the
+    # objects from a different std/musl. This is the real guard against the
     # poisoning above; the pin just keeps the version string honest.
     if [ -n "$SCCACHE_S3_KEY_PREFIX" ]; then \
         export SCCACHE_S3_KEY_PREFIX="${SCCACHE_S3_KEY_PREFIX}/${TARGET}/rustc-$(rustc --version | awk '{print $2}')"; \
