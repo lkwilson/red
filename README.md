@@ -3,10 +3,11 @@
 A Rust/axum backend hosting scoped APIs for countdown, Minecraft, systems, and
 Herd.
 
-Follows the standard `home-infra` pipeline (see `home-infra/templates`), but
-images are **amd64-only**: every cluster node is x86, so CI pushes a single-arch
-image straight to `<tag>` (no `<tag>-amd64` + manifest step). Dev happens on arm
-Macs; only the build target is x86.
+Follows the `home-infra` delivery pattern (see `home-infra/templates`), with
+checks and Docker builds on `brew7`. Images are **amd64-only**: the deployment
+target is x86, so CI pushes a single-arch image straight to `<tag>` (no
+`<tag>-amd64` + manifest step). Dev can happen on arm Macs; the image target is
+x86.
 
 ## Endpoints
 
