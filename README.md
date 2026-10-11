@@ -1,7 +1,7 @@
 # red
 
-A Rust/axum backend hosting two scoped APIs: the **countdown** store (split out
-of `hub`) and the **mc** control panel (consumed by `mc-ui`).
+A Rust/axum backend hosting scoped APIs for countdown, Minecraft, systems, and
+Herd.
 
 Follows the standard `home-infra` pipeline (see `home-infra/templates`), but
 images are **amd64-only**: every cluster node is x86, so CI pushes a single-arch
@@ -12,6 +12,7 @@ Macs; only the build target is x86.
 
 - `GET /` — liveness banner.
 - `GET /health` — health probe.
+- `GET /api/herd/status` — lightweight JSON status for the Herd frontend.
 
 **Countdown scope** (`src/countdowns.rs`, redis-backed):
 
