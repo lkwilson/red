@@ -104,7 +104,7 @@ async fn status(State(bridge): State<Bridge>) -> impl IntoResponse {
     let result = tokio::time::timeout(bridge.probe_timeout, async {
         let response = bridge
             .client
-            .get(format!("{}/api/codex/status", bridge.origin))
+            .get(format!("{}/api/codex/v2/status", bridge.origin))
             .send()
             .await;
         let mut response = match response {
@@ -368,8 +368,9 @@ mod tests {
                 Some("bad_response"),
             ),
         ] {
-            let (upstream, _upstream) =
-                serve(Router::new().route("/api/codex/status", get(move || async { Json(body) })))?;
+            let (upstream, _upstream) = serve(
+                Router::new().route("/api/codex/v2/status", get(move || async { Json(body) })),
+            )?;
             let (red, _red) = frontend(&upstream)?;
             let response = reqwest::get(format!("{red}/api/codex/status")).await?;
             assert_eq!(response.status(), 200);
@@ -410,7 +411,7 @@ mod tests {
     async fn probe_deadline_includes_slow_body_and_headers() -> Result<()> {
         for slow_headers in [true, false] {
             let (upstream, _upstream) = serve(Router::new().route(
-                "/api/codex/status",
+                "/api/codex/v2/status",
                 get(move || async move {
                     if slow_headers {
                         tokio::time::sleep(Duration::from_millis(300)).await;

@@ -21,9 +21,9 @@ keep the existing trusted network and frontend access controls.
 
 ## Availability
 
-`GET /api/codex/status` makes one fresh request to the wrapper's matching status
-endpoint. Its two-second total deadline includes connect, response headers,
-response body, and parsing. There is no cached result or background probe. The
+`GET /api/codex/status` makes one fresh request to the wrapper's
+`/api/codex/v2/status` endpoint. Its two-second total deadline includes connect,
+response headers, response body, and parsing. There is no cached result or background probe. The
 JSON body is limited to 16 KiB. The response is always HTTP 200, with:
 
 ```json
