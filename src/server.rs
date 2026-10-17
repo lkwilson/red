@@ -24,6 +24,7 @@ pub async fn start_server(join_set: &mut JoinSet<Result<()>>, config: Config) ->
     let app = setup_mc(app).await?;
     let app = setup_systems(app).await?;
     let app = setup_herd(app);
+    let app = crate::codex::setup_codex(app)?;
 
     let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
     info!("Server listening on http://{}", addr);

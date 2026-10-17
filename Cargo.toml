@@ -24,7 +24,7 @@ rcon = { version = "0.6", features = ["rt-tokio"] }
 redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
 # HTTP client for the /api/mc/*/history endpoint's Loki queries. default-features
 # off + rustls-tls keeps the static musl build openssl-free (same choice as kube).
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_yaml = "0.9.34"

@@ -1,3 +1,4 @@
+mod codex;
 mod countdowns;
 mod herd;
 mod mc;

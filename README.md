@@ -1,7 +1,7 @@
 # red
 
 A Rust/axum backend hosting scoped APIs for countdown, Minecraft, systems, and
-Herd.
+Herd, plus an optional Codex wrapper bridge.
 
 Follows the standard `home-infra` pipeline (see `home-infra/templates`), but
 images are **amd64-only**: every cluster node is x86, so CI pushes a single-arch
@@ -13,6 +13,18 @@ Macs; only the build target is x86.
 - `GET /` — liveness banner.
 - `GET /health` — health probe.
 - `GET /api/herd/status` — lightweight JSON status for the Herd frontend.
+
+**Codex scope** (`src/codex.rs`):
+
+- `GET /api/codex/status` — on-demand wrapper/App Server availability, with a
+  two-second total deadline; stopped wrappers return HTTP 200 `inactive`.
+- Other `/api/codex` HTTP requests — streaming proxy to the cat7 wrapper.
+  Transport failures return HTTP 503 `inactive`; WebSocket upgrades return 501.
+- `CODEX_WRAPPER_URL` defaults to `http://10.1.1.3:3000`. It does not affect
+  Red health. Start the wrapper with `CODEX_WRAPPER_BIND=10.1.1.3:3000` in tmux.
+
+See [docs/codex.md](docs/codex.md) for the status contract, timeout behavior,
+startup instructions and supported protocols.
 
 **Countdown scope** (`src/countdowns.rs`, redis-backed):
 
