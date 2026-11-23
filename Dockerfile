@@ -1,58 +1,46 @@
-# Pinned, not `rust:alpine`. A rolling base image is the sccache poison vector:
-# sccache fingerprints the compiler via `rustc -vV`, which stays identical when
-# Alpine rebuilds the *same* rustc version against a newer musl. Cached objects
-# built against the old std then get linked into a build using the new one ->
-# ABI mismatch -> SIGSEGV on boot. Bump this tag (Renovate can) to move rustc.
-FROM rust:1.100-alpine3.24 AS builder
+ARG XX_IMAGE
+ARG RUST_IMAGE
+FROM --platform=$BUILDPLATFORM ${XX_IMAGE} AS xx
+FROM --platform=$BUILDPLATFORM ${RUST_IMAGE} AS builder
+COPY --from=xx / /
 WORKDIR /app
-COPY Cargo.lock Cargo.lock
-COPY Cargo.toml Cargo.toml
-COPY src src
-
-# Shared compiler cache (self-hosted MinIO, see scripts/check.sh). Non-secret
-# so it's passed via --build-arg; falls back to a local disk cache if unset.
-ARG SCCACHE_VERSION=0.20.0
+RUN apk add --no-cache curl clang lld llvm file
+ARG BUILDARCH
+ARG TARGETPLATFORM
+RUN xx-apk add --no-cache gcc musl-dev
+ARG SCCACHE_VERSION
+RUN set -eu; \
+    case "$BUILDARCH" in amd64) arch=x86_64 ;; arm64) arch=aarch64 ;; *) exit 1 ;; esac; \
+    curl -fL "https://github.com/mozilla/sccache/releases/download/v$SCCACHE_VERSION/sccache-v$SCCACHE_VERSION-$arch-unknown-linux-musl.tar.gz" -o /tmp/sccache.tar.gz; \
+    tar xzf /tmp/sccache.tar.gz -C /tmp; \
+    cp "/tmp/sccache-v$SCCACHE_VERSION-$arch-unknown-linux-musl/sccache" /usr/local/bin/sccache
+# Include build.rs, Cargo configuration and app-owned compilation assets.
+COPY . .
+ARG APP_NAME
+ARG RUST_IMAGE
+ARG XX_IMAGE
+ARG CARGO_BUILD_JOBS
 ARG SCCACHE_BUCKET
 ARG SCCACHE_ENDPOINT
 ARG SCCACHE_REGION
 ARG SCCACHE_S3_USE_SSL
 ARG SCCACHE_S3_KEY_PREFIX
-ENV RUSTC_WRAPPER=sccache
-
-# AWS creds are secret, so they're mounted rather than passed as build args
-# (build args end up in the image history/cache).
-RUN --mount=type=secret,id=sccache_aws_access_key_id \
-    --mount=type=secret,id=sccache_aws_secret_access_key \
-    apk add --no-cache curl && \
-    TARGET="x86_64-unknown-linux-musl" && \
-    curl -L "https://github.com/mozilla/sccache/releases/download/v${SCCACHE_VERSION}/sccache-v${SCCACHE_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
-      | tar xz -C /tmp && \
-    install -m 755 "/tmp/sccache-v${SCCACHE_VERSION}-x86_64-unknown-linux-musl/sccache" /usr/local/bin/sccache && \
-    rustup target add "$TARGET" && \
-    export AWS_ACCESS_KEY_ID="$(cat /run/secrets/sccache_aws_access_key_id 2>/dev/null || true)" && \
-    export AWS_SECRET_ACCESS_KEY="$(cat /run/secrets/sccache_aws_secret_access_key 2>/dev/null || true)" && \
-    [ -n "$SCCACHE_BUCKET" ] || unset SCCACHE_BUCKET; \
-    [ -n "$SCCACHE_ENDPOINT" ] || unset SCCACHE_ENDPOINT; \
-    [ -n "$SCCACHE_REGION" ] || unset SCCACHE_REGION; \
-    [ -n "$SCCACHE_S3_USE_SSL" ] || unset SCCACHE_S3_USE_SSL; \
-    # Scope the sccache namespace by target triple + exact rustc version, so a
-    # toolchain/base-image bump lands in a *fresh* namespace instead of reusing
-    # objects from a different std/musl. This is the real guard against the
-    # poisoning above; the pin just keeps the version string honest.
-    if [ -n "$SCCACHE_S3_KEY_PREFIX" ]; then \
-        export SCCACHE_S3_KEY_PREFIX="${SCCACHE_S3_KEY_PREFIX}/${TARGET}/rustc-$(rustc --version | awk '{print $2}')"; \
-    else unset SCCACHE_S3_KEY_PREFIX; fi; \
-    [ -n "$AWS_ACCESS_KEY_ID" ] || unset AWS_ACCESS_KEY_ID; \
-    [ -n "$AWS_SECRET_ACCESS_KEY" ] || unset AWS_SECRET_ACCESS_KEY; \
-    cargo build --release --target "$TARGET" --jobs 6 && \
-    sccache --show-stats || true && \
-    mkdir -p /app/target/release && \
-    cp "/app/target/$TARGET/release/red" /app/target/release/red
-
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=secret,id=sccache_aws_access_key_id,required=true \
+    --mount=type=secret,id=sccache_aws_secret_access_key,required=true \
+    set -eu; \
+    target="$(xx-cargo --print-target-triple)"; \
+    export RUSTC_WRAPPER=sccache; \
+    export AWS_ACCESS_KEY_ID="$(cat /run/secrets/sccache_aws_access_key_id)"; \
+    export AWS_SECRET_ACCESS_KEY="$(cat /run/secrets/sccache_aws_secret_access_key)"; \
+    toolchain_id="$(printf '%s\n%s\n' "$RUST_IMAGE" "$XX_IMAGE" | sha256sum | cut -d ' ' -f 1)"; \
+    export SCCACHE_S3_KEY_PREFIX="$SCCACHE_S3_KEY_PREFIX/release/cross-v1/$BUILDARCH/$target/toolchain-$toolchain_id/rustc-$(rustc --version | awk '{print $2}')"; \
+    xx-cargo build --locked --profile release --bin "$APP_NAME" --jobs "$CARGO_BUILD_JOBS"; \
+    sccache --show-stats; \
+    xx-verify --static "/app/target/$target/release/$APP_NAME"; \
+    mkdir /out; cp "/app/target/$target/release/$APP_NAME" /out/app
 FROM alpine:3.24
 WORKDIR /app
-COPY --from=builder /app/target/release/red bin/red
-RUN chmod +x bin/red
-ENV PATH="/app/bin:${PATH}"
-VOLUME /app/config.yaml
-CMD ["red"]
+COPY --from=builder --chmod=755 /out/app /app/bin/app
+CMD ["/app/bin/app"]

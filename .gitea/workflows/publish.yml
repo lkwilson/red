@@ -1,0 +1,27 @@
+name: Publish release image
+on:
+  push:
+    tags: ['[0-9]*.[0-9]*.[0-9]*', 'v[0-9]*.[0-9]*.[0-9]*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing Git release tag whose upload failed
+        required: true
+concurrency:
+  group: publish-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: cat7
+    env:
+      RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+      IMAGE_DOCKER_ENDPOINT: tcp://localhost:2375
+      AWS_ACCESS_KEY_ID: ${{ secrets.SCCACHE_S3_ACCESS_KEY }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_S3_SECRET_KEY }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ github.event.inputs.tag || github.ref_name }}
+          fetch-depth: 0
+      - name: Build production images and publish
+        run: bash scripts/release.sh "$RELEASE_TAG"

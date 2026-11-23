@@ -1,0 +1,7 @@
+.git
+/target
+**/target
+/.env
+/.env.*
+/config.yaml
+/config.json

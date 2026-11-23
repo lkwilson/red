@@ -3,10 +3,14 @@
 A Rust/axum backend hosting scoped APIs for countdown, Minecraft, systems, and
 Herd, plus an optional Codex wrapper bridge.
 
-Follows the standard `home-infra` pipeline (see `home-infra/templates`), but
-images are **amd64-only**: every cluster node is x86, so CI pushes a single-arch
-image straight to `<tag>` (no `<tag>-amd64` + manifest step). Dev happens on arm
-Macs; only the build target is x86.
+Uses the canonical `home-infra/templates/rust` CI and release template.
+PRs run native format, strict Clippy, tests, and development builds without
+Docker. Labelled merges create version tags; releases build and publish only
+production linux/amd64 images to `zot.endsy.me/library/red` with immutable
+version tags (no main, snapshot, or latest images).
+
+The container runs `/app/bin/app` from `/app`. Mount the existing application
+configuration at `/app/config.yaml` as before.
 
 ## Endpoints
 
@@ -104,14 +108,13 @@ Routes are registered in `src/server.rs` (`setup_countdowns` + `setup_mc` +
 
 ## Checks
 
+```bash
+bash scripts/all.sh
 ```
-cargo fmt --all -- --check
-cargo clippy --all-targets --all-features -- \
-  -W clippy::unwrap_used \
-  -W clippy::expect_used \
-  -W clippy::panic \
-  -W clippy::unimplemented \
-  -W clippy::todo \
-  -D warnings
-cargo test --verbose
-```
+
+This installs pinned tools and runs format, strict Clippy, all native tests,
+and the development build for the host architecture. Set `AWS_ACCESS_KEY_ID`
+and `AWS_SECRET_ACCESS_KEY` for the configured shared sccache store. Tests and
+builds reuse compatible development artifacts; release builds use a separate
+production cache. Repository settings are in `scripts/env.sh`; all other managed
+files match the canonical template.

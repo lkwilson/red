@@ -5,51 +5,32 @@ on:
     types: [closed]
     branches: [main]
 
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   release:
-    if: ${{ github.event.pull_request.merged == true && (contains(github.event.pull_request.labels.*.name, 'patch') || contains(github.event.pull_request.labels.*.name, 'minor') || contains(github.event.pull_request.labels.*.name, 'major')) }}
+    if: >-
+      ${{ github.event.pull_request.merged == true &&
+      (contains(github.event.pull_request.labels.*.name, 'patch') ||
+      contains(github.event.pull_request.labels.*.name, 'minor') ||
+      contains(github.event.pull_request.labels.*.name, 'major')) }}
     runs-on: brew7
     steps:
       - uses: actions/checkout@v7
         with:
-          # PAT, NOT github.token: Gitea Actions does not trigger workflows for
-          # refs pushed with the automatic token (loop-prevention), so a tag
-          # pushed by bump-version.sh over github.token would never fire build.yml.
-          # RELEASE_TOKEN is an org-level PAT with repo write.
+          # PAT required so this tag push triggers the image workflow.
           token: ${{ secrets.RELEASE_TOKEN }}
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
           fetch-depth: 0
-
-      - name: Determine bump type
-        id: bump
+      - name: Tag the merged commit
         env:
           LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
         run: |
-          if echo ",$LABELS," | grep -q ',major,'; then
-            echo "type=major" >> "$GITHUB_OUTPUT"
-          elif echo ",$LABELS," | grep -q ',minor,'; then
-            echo "type=minor" >> "$GITHUB_OUTPUT"
-          else
-            echo "type=patch" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Bump version tag
-        id: tag
-        env:
-          BUMP: ${{ steps.bump.outputs.type }}
-        run: bash ./scripts/bump-version.sh "$BUMP"
-
-      - name: Create Gitea release
-        env:
-          TAG: ${{ steps.tag.outputs.tag }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: |
-          curl -sf -X POST \
-            -H "Authorization: token ${{ github.token }}" \
-            -H "Content-Type: application/json" \
-            "${{ github.server_url }}/api/v1/repos/${{ github.repository }}/releases" \
-            -d "{
-              \"tag_name\": \"${TAG}\",
-              \"name\": \"${TAG}\",
-              \"body\": \"PR #${PR_NUMBER}: ${PR_TITLE}\"
-            }"
+          case ",$LABELS," in
+            *,major,*) bump=major ;;
+            *,minor,*) bump=minor ;;
+            *) bump=patch ;;
+          esac
+          bash scripts/bump-version.sh "$bump"
