@@ -27,10 +27,9 @@ jobs:
           docker buildx create --name mybuilder --use builders
       - name: Build and push (amd64)
         run: |
-          REG='${{ secrets.DOCKER_REG_URL }}'
+          REG='zot.endsy.me'
           NAME="${GITHUB_REPOSITORY##*/}"
           TAG="${GITHUB_REF_NAME}"
-          echo '${{ secrets.DOCKER_REG_PW }}' | docker login "$REG" -u '${{ secrets.DOCKER_REG_UN }}' --password-stdin
           docker buildx build --platform linux/amd64 \
             --build-arg SCCACHE_BUCKET="$SCCACHE_BUCKET" \
             --build-arg SCCACHE_ENDPOINT="$SCCACHE_ENDPOINT" \
