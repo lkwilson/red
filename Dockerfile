@@ -11,7 +11,7 @@ COPY src src
 
 # Shared compiler cache (self-hosted MinIO, see scripts/check.sh). Non-secret
 # so it's passed via --build-arg; falls back to a local disk cache if unset.
-ARG SCCACHE_VERSION=0.19.0
+ARG SCCACHE_VERSION=0.20.0
 ARG SCCACHE_BUCKET
 ARG SCCACHE_ENDPOINT
 ARG SCCACHE_REGION
