@@ -13,7 +13,7 @@ jobs:
     runs-on: cat7
     env:
       SCCACHE_BUCKET: sccache
-      SCCACHE_ENDPOINT: https://sccache-s3.endsy.me
+      SCCACHE_ENDPOINT: https://minio.endsy.me
       SCCACHE_REGION: us-east-1
       SCCACHE_S3_USE_SSL: "true"
       SCCACHE_S3_KEY_PREFIX: red
